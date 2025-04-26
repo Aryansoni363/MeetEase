@@ -19,4 +19,8 @@ import userRouter from './routes/user.routes.js';
 
 app.use('/api/v1/users', userRouter);
 
+import meetingRoutes from "./routes/meeting.routes.js";
+app.use("/api/meeting", meetingRoutes);
+
+
 export { app }
