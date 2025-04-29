@@ -1,61 +1,59 @@
-import { Server } from 'socket.io';
-import jwt from 'jsonwebtoken';
+// src/socket/index.js
 
-export default function initializeSocket(server) {
+const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+const { ApiResponse } = require('../utils/ApiResponse');
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h'; // Default to 1 hour
+
+/**
+ * Initializes the Socket.IO server.
+ * @param {http.Server} server - The HTTP server instance.
+ * @returns {Server} - The initialized Socket.IO server.
+ */
+function initializeSocket(server) {
   const io = new Server(server, {
     cors: {
-      origin: process.env.ALLOWED_ORIGINS.split(','),
-      credentials: true,
+      origin: '*', // Adjust as needed for security
+      methods: ['GET', 'POST'],
     },
   });
 
-  io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
-    if (!token) return next(new Error('Authentication error'));
-
-    try {
-      const payload = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-      socket.user = payload;
-      next();
-    } catch (err) {
-      next(new Error('Authentication error'));
-    }
-  });
-
   io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.user._id}`);
+    console.log(`🔌 New client connected: ${socket.id}`);
 
-    socket.on('join-room', ({ meetingCode }) => {
-      socket.join(meetingCode);
-      socket.to(meetingCode).emit('user-joined', { userId: socket.user._id });
+    // Listen for authentication event
+    socket.on('authenticate', (token) => {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        socket.user = decoded;
+        socket.emit('authenticated', new ApiResponse(true, 'Authentication successful', decoded));
+        console.log(`✅ User authenticated: ${decoded.username}`);
+      } catch (err) {
+        socket.emit('unauthorized', new ApiResponse(false, 'Invalid or expired token'));
+        socket.disconnect();
+        console.warn(`❌ Authentication failed for socket ${socket.id}`);
+      }
     });
 
-    socket.on('leave-room', ({ meetingCode }) => {
-      socket.leave(meetingCode);
-      socket.to(meetingCode).emit('user-left', { userId: socket.user._id });
-    });
-
-    socket.on('send-message', ({ meetingCode, message }) => {
-      const payload = {
-        userId: socket.user._id,
-        text: message,
-        timestamp: new Date(),
-      };
-      socket.to(meetingCode).emit('receive-message', payload);
-    });
-
-    socket.on('disconnecting', () => {
-      socket.rooms.forEach((room) => {
-        if (room !== socket.id) {
-          socket.to(room).emit('user-left', { userId: socket.user._id });
-        }
-      });
+    // Example of handling a custom event
+    socket.on('joinRoom', (room) => {
+      if (socket.user) {
+        socket.join(room);
+        socket.emit('joinedRoom', new ApiResponse(true, `Joined room: ${room}`));
+        console.log(`👤 User ${socket.user.username} joined room: ${room}`);
+      } else {
+        socket.emit('unauthorized', new ApiResponse(false, 'User not authenticated'));
+      }
     });
 
     socket.on('disconnect', () => {
-      console.log(`User disconnected: ${socket.user._id}`);
+      console.log(`🔌 Client disconnected: ${socket.id}`);
     });
   });
 
   return io;
 }
+
+module.exports = { initializeSocket };

@@ -1,26 +1,36 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 
-
+import authRoutes from './routes/auth.routes.js';
+import meetingRoutes from './routes/meeting.routes.js';
+import notFound from './middleware/notFound.js';
+import errorHandler from './middleware/errorHandler.js';
+import { CORS_ORIGIN } from './config/index.js';
 
 const app = express();
-app.use(cors({ origin:process.env.CORS_ORIGIN, credentials: true }));
-app.use(express.json({limit: '40kb'}));
-app.use(express.urlencoded({ extended: true, limit: '40kb' }));
-app.use(express.static('public'));
+
+// Security headers
+app.use(helmet());
+// Logging
+app.use(morgan('dev'));
+// CORS
+app.use(cors({ origin: CORS_ORIGIN.split(','), credentials: true }));
+// Body parsers
+app.use(express.json({ limit: '50kb' }));
+app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 app.use(cookieParser());
+// Static
+app.use('/public', express.static('public'));
 
+// API versioning
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/meeting', meetingRoutes);
 
+// 404 handler & global error handler
+app.use(notFound);
+app.use(errorHandler);
 
-
-// Import routes
-import userRouter from './routes/user.routes.js';
-
-app.use('/api/v1/users', userRouter);
-
-import meetingRoutes from "./routes/meeting.routes.js";
-app.use("/api/meeting", meetingRoutes);
-
-
-export { app }
+export default app;
