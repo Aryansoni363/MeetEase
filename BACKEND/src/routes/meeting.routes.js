@@ -7,4 +7,9 @@ router.use(verifyJWT);        // protects all routes below
 router.post("/create", createMeeting);
 router.get("/join/:roomId", joinMeeting);
 router.get("/history", getMeetingHistory);
+// ─── Chat REST endpoints ───────────────────────────────────
+router.post('/:roomId/message', postMessage);
+router.get('/:roomId/messages', getMessages);
+
+
 export default router;

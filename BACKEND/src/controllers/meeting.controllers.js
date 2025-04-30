@@ -32,6 +32,8 @@ const createMeeting = asyncHandler(async (req, res) => {
     { new: true }
   );
 
+  
+
   // Return both IDs and the public URL
   return res.status(201).json(
     new ApiResponse(201, {
@@ -91,4 +93,41 @@ const getMeetingHistory = asyncHandler(async (req, res) => {
   );
 });
 
-export { createMeeting, joinMeeting, getMeetingHistory };
+// ─── POST /api/v1/meeting/:roomId/message ─────────────────
+const postMessage = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+  const { text } = req.body;
+  if (!text?.trim()) throw new ApiError(400, 'Message text is required');
+
+  const meeting = await Meeting.findOne({ roomId });
+  if (!meeting) throw new ApiError(404, 'Meeting not found');
+
+  const message = {
+    sender: req.user._id,
+    text,
+    timestamp: new Date(),
+  };
+  meeting.messages.push(message);
+  await meeting.save();
+
+  res
+    .status(201)
+    .json(new ApiResponse(201, message, 'Message posted'));
+});
+
+// ─── GET /api/v1/meeting/:roomId/messages ────────────────
+const getMessages = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+  const meeting = await Meeting.findOne({ roomId }).populate('messages.sender', 'username');
+  if (!meeting) throw new ApiError(404, 'Meeting not found');
+
+  res.json(new ApiResponse(200, meeting.messages, 'Messages fetched'));
+});
+
+export {
+  createMeeting,
+  joinMeeting,
+  getMeetingHistory,
+  postMessage,
+  getMessages,
+};
