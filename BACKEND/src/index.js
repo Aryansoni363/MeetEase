@@ -1,3 +1,6 @@
+//src/index.js
+
+
 import http from 'http';
 import connectDB from './db/index.js';
 import initializeSocket from './socket/index.js';

@@ -6,17 +6,15 @@
 class ApiResponse {
   /**
    * Creates an instance of ApiResponse.
-   * @param {boolean} success - Indicates if the operation was successful.
+   * @param {number} statusCode - HTTP status code.
+   * @param {object} data - Data payload.
    * @param {string} message - A descriptive message.
-   * @param {object} [data=null] - Optional data payload.
    */
-  constructor(success, message, data = null) {
-    this.success = success;
+  constructor(statusCode, data, message) {
+    this.success = statusCode >= 200 && statusCode < 300;
+    this.data = data;
     this.message = message;
-    if (data !== null) {
-      this.data = data;
-    }
   }
 }
 
-module.exports = { ApiResponse };
+export { ApiResponse };

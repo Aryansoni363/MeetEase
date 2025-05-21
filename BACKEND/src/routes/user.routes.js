@@ -1,3 +1,6 @@
+// backend/src/routes/user.routes.js
+
+
 import {Router} from 'express';
 import { loginUser, logoutUser, refreshAccessToken, registerUser } from '../controllers/user.controllers.js';
 import { verifyJWT } from '../middlewares/auth.middleware.js';

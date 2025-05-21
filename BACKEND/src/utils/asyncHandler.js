@@ -1,3 +1,6 @@
+
+// backend/src/utils/asyncHandler.js
+
 const asyncHandler = (requestHandler)  =>{
 
    return (req, res, next) => {
@@ -6,5 +9,4 @@ const asyncHandler = (requestHandler)  =>{
 
 }
 
-export{asyncHandler}
-  
+export { asyncHandler };

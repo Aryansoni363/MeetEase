@@ -1,3 +1,5 @@
+// src/models/meeting.models.js
+
 import mongoose, { Schema } from 'mongoose';
 import mongooseAggregatePaginate from 'mongoose-aggregate-paginate-v2';
 
@@ -8,6 +10,15 @@ const meetingSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
+    
+    meetingCode: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true,
+      },
+
+
     host: {
       type: Schema.Types.ObjectId,
       ref: 'User',

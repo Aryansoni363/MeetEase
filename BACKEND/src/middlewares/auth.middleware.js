@@ -1,3 +1,8 @@
+// backend/src/middlewares/auth.middleware.js
+
+// basic user authentication and management functions
+
+
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 import { ApiError } from "../utils/ApiError.js";
