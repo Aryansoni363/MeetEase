@@ -2,9 +2,9 @@ import api from './api'
 
 export const meetingService = {
   // Create a new meeting
-  createMeeting: async () => {
+  createMeeting: async (startTime, endTime) => {
     try {
-      const response = await api.post('/meeting/create')
+      const response = await api.post('/meeting/create', { startTime, endTime })
       return response.data
     } catch (error) {
       throw error
@@ -54,7 +54,7 @@ export const meetingService = {
   // Send a message
   postMessage: async (roomId, message) => {
     try {
-      const response = await api.post(`/meeting/${roomId}/message`, { message })
+      const response = await api.post(`/meeting/${roomId}/message`, { text: message})
       return response.data
     } catch (error) {
       throw error

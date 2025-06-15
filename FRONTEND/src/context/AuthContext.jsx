@@ -8,7 +8,8 @@ const initialState = {
   user: null,
   isAuthenticated: false,
   isLoading: true,
-  error: null
+  error: null,
+  accessToken: null // Store JWT for socket auth
 }
 
 function authReducer(state, action) {
@@ -18,10 +19,11 @@ function authReducer(state, action) {
     case 'LOGIN_SUCCESS':
       return {
         ...state,
-        user: action.payload,
+        user: action.payload.user || action.payload, // support both formats
         isAuthenticated: true,
         isLoading: false,
-        error: null
+        error: null,
+        accessToken: action.payload.accessToken || null
       }
     case 'LOGOUT':
       return {
@@ -29,7 +31,8 @@ function authReducer(state, action) {
         user: null,
         isAuthenticated: false,
         isLoading: false,
-        error: null
+        error: null,
+        accessToken: null
       }
     case 'SET_ERROR':
       return {
@@ -58,9 +61,13 @@ export function AuthProvider({ children }) {
   const checkAuth = async () => {
     try {
       dispatch({ type: 'SET_LOADING', payload: true })
-      const response = await api.get('/users/refresh-token')
-      if (response.data?.data?.user) {
-        dispatch({ type: 'LOGIN_SUCCESS', payload: response.data.data.user })
+      // Only get new tokens
+      const refreshRes = await api.post('/users/refresh-token')
+      const newAccessToken = refreshRes.data?.data?.accessToken
+      // Now get user profile
+      const meResponse = await api.get('/users/me')
+      if (meResponse.data?.data && newAccessToken) {
+        dispatch({ type: 'LOGIN_SUCCESS', payload: { user: meResponse.data.data, accessToken: newAccessToken } })
       } else {
         dispatch({ type: 'LOGOUT' })
       }
@@ -74,8 +81,8 @@ export function AuthProvider({ children }) {
       dispatch({ type: 'SET_LOADING', payload: true })
       const response = await api.post('/users/login', credentials)
 
-      if (response.data?.success && response.data?.data?.user) {
-        dispatch({ type: 'LOGIN_SUCCESS', payload: response.data.data.user })
+      if (response.data?.success && response.data?.data?.user && response.data?.data?.accessToken) {
+        dispatch({ type: 'LOGIN_SUCCESS', payload: { user: response.data.data.user, accessToken: response.data.data.accessToken } })
         toast.success('Login successful!')
         return { success: true }
       }
@@ -94,8 +101,8 @@ export function AuthProvider({ children }) {
       dispatch({ type: 'SET_LOADING', payload: true })
       const response = await api.post('/users/register', userData)
 
-      if (response.data?.success && response.data?.data?.user) {
-        dispatch({ type: 'LOGIN_SUCCESS', payload: response.data.data.user })
+      if (response.data?.success && response.data?.data?.user && response.data?.data?.accessToken) {
+        dispatch({ type: 'LOGIN_SUCCESS', payload: { user: response.data.data.user, accessToken: response.data.data.accessToken } })
         toast.success('Registration successful!')
         return { success: true }
       }
@@ -143,7 +150,8 @@ export function AuthProvider({ children }) {
     register,
     logout,
     updateProfile,
-    checkAuth
+    checkAuth,
+    accessToken: state.accessToken // Expose accessToken for socket
   }
 
   return (

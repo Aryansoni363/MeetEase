@@ -7,16 +7,17 @@ const SocketContext = createContext()
 export function SocketProvider({ children }) {
   const [socket, setSocket] = useState(null)
   const [isConnected, setIsConnected] = useState(false)
-  const { isAuthenticated, user } = useAuth()
+  const { isAuthenticated, user, accessToken } = useAuth()
 
   useEffect(() => {
-    if (isAuthenticated && user) {
+    if (isAuthenticated && user && accessToken) {
       // Initialize socket connection
       const newSocket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:8000', {
         withCredentials: true,
         auth: {
-          token: 'from-cookie' // Backend will read from HTTP-only cookie
-        }
+          token: accessToken // Use the real JWT from AuthContext
+        },
+        transports: ['websocket']
       })
 
       newSocket.on('connect', () => {
@@ -49,7 +50,7 @@ export function SocketProvider({ children }) {
         setIsConnected(false)
       }
     }
-  }, [isAuthenticated, user])
+  }, [isAuthenticated, user, accessToken])
 
   const value = {
     socket,

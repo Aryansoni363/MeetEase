@@ -194,4 +194,13 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
   }
 });
 
-export { registerUser, loginUser, logoutUser, refreshAccessToken };
+// Get current user profile
+const getMe = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select('-password -refreshToken');
+  if (!user) {
+    throw new ApiError(404, 'User not found');
+  }
+  res.status(200).json(new ApiResponse(200, user, 'User profile fetched successfully'));
+});
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken, getMe };

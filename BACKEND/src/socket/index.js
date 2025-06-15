@@ -56,18 +56,21 @@ export default function initializeSocket(server) {
     });
 
     // Updated to send the sender's name
-    socket.on("send-message", async ({ room, text }) => {
+    socket.on("send-message", async ({ room, text, timestamp }) => {
+      // Only use schema-matching object
       const msg = {
-        senderId: socket.user._id,
-        senderName: socket.user.username, // New field for sender's name.
+        sender: socket.user._id, // ObjectId for sender
         text,
-        timestamp: new Date(),
+        timestamp: timestamp ? new Date(timestamp) : new Date(),
       };
-      io.in(room).emit("receive-message", msg);
+      io.in(room).emit("receive-message", {
+        ...msg,
+        senderName: socket.user.username, // send name for UI, but not for DB
+      });
       try {
         const meeting = await Meeting.findOne({ roomId: room });
         if (meeting) {
-          meeting.messages.push(msg);
+          meeting.messages.push(msg); // Only schema fields
           await meeting.save();
           logger.info(`Chat message saved to meeting ${room}`);
         }

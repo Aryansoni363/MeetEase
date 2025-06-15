@@ -42,10 +42,14 @@ const getRoomIdFromMeetingCode = asyncHandler(async (req, res) => {
 const createMeeting = asyncHandler(async (req, res) => {
   logger.info("createMeeting request", { correlationId: req.correlationId, userId: req.user._id });
   
-  const { startTime } = req.body;
+  const { startTime, endTime } = req.body;
   if (!startTime) {
     logger.error("Start time is required");
     throw new ApiError(400, "Start time is required");
+  }
+  if (endTime && new Date(endTime) <= new Date(startTime)) {
+    logger.error("End time must be after start time");
+    throw new ApiError(400, "End time must be after start time");
   }
 
   const roomId = uuidv4();
@@ -57,6 +61,7 @@ const createMeeting = asyncHandler(async (req, res) => {
     host: req.user._id,
     participants: [{ user: req.user._id, joinTime: new Date(startTime) }],
     startTime: new Date(startTime),
+    endTime: endTime ? new Date(endTime) : undefined,
   });
 
   // Record in user's meeting history

@@ -25,6 +25,9 @@ function Dashboard() {
   const [joinCode, setJoinCode] = useState('')
   const [isJoining, setIsJoining] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [scheduledTime, setScheduledTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [meetingType, setMeetingType] = useState("instant"); // 'instant' or 'scheduled'
 
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -55,12 +58,31 @@ function Dashboard() {
   }
 
   const handleCreateMeeting = async () => {
-    setIsCreating(true)
+    let start = scheduledTime;
+    let end = endTime;
+    if (meetingType === "instant") {
+      start = new Date().toISOString();
+      end = "";
+    } else {
+      if (!scheduledTime) {
+        toast.error("Please select a start time for the meeting");
+        return;
+      }
+      if (!endTime) {
+        toast.error("Please select an end time for the meeting");
+        return;
+      }
+      if (new Date(endTime) <= new Date(scheduledTime)) {
+        toast.error("End time must be after start time");
+        return;
+      }
+    }
+    setIsCreating(true);
     try {
-      const response = await meetingService.createMeeting()
+      const response = await meetingService.createMeeting(start, end);
       if (response.success && response.data?.roomId) {
         toast.success('Meeting created successfully!')
-        navigate(`/meeting/${response.data.roomId}`)
+        navigate(`/prejoin/${response.data.roomId}`)
       }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to create meeting')
@@ -156,13 +178,48 @@ function Dashboard() {
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Start New Meeting
+                  Start or Schedule Meeting
                 </h3>
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Create an instant meeting room
+                  Start instantly or pick a date and time
                 </p>
               </div>
             </div>
+            <div className="flex gap-4 mb-3">
+              <button
+                className={`btn ${meetingType === "instant" ? "btn-primary" : "btn-outline"}`}
+                onClick={() => setMeetingType("instant")}
+                disabled={isCreating}
+              >
+                Start Now
+              </button>
+              <button
+                className={`btn ${meetingType === "scheduled" ? "btn-primary" : "btn-outline"}`}
+                onClick={() => setMeetingType("scheduled")}
+                disabled={isCreating}
+              >
+                Schedule
+              </button>
+            </div>
+            {meetingType === "scheduled" && (
+              <>
+                <input
+                  type="datetime-local"
+                  value={scheduledTime}
+                  onChange={e => setScheduledTime(e.target.value)}
+                  className="input w-full mb-2"
+                  placeholder="Start time"
+                />
+                <input
+                  type="datetime-local"
+                  value={endTime}
+                  onChange={e => setEndTime(e.target.value)}
+                  className="input w-full mb-3"
+                  placeholder="End time"
+                  min={scheduledTime}
+                />
+              </>
+            )}
             <button
               onClick={handleCreateMeeting}
               disabled={isCreating}
@@ -171,12 +228,12 @@ function Dashboard() {
               {isCreating ? (
                 <>
                   <LoadingSpinner size="sm" />
-                  Creating...
+                  {meetingType === "instant" ? "Starting..." : "Scheduling..."}
                 </>
               ) : (
                 <>
                   <Video className="w-5 h-5" />
-                  Start Meeting
+                  {meetingType === "instant" ? "Start Meeting" : "Schedule Meeting"}
                 </>
               )}
             </button>

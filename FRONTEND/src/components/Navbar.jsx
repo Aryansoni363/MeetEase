@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -22,6 +22,9 @@ function Navbar() {
   const { theme, toggleTheme } = useTheme()
   const location = useLocation()
   const navigate = useNavigate()
+  const navRef = useRef()
+  const lastScrollY = useRef(window.scrollY)
+  const [showNav, setShowNav] = useState(true)
 
   const handleLogout = async () => {
     await logout()
@@ -42,8 +45,27 @@ function Navbar() {
     return location.pathname.startsWith(path)
   }
 
+  useEffect(() => {
+    const handleScroll = () => {
+      if (window.scrollY < lastScrollY.current) {
+        setShowNav(true)
+      } else if (window.scrollY > lastScrollY.current) {
+        setShowNav(false)
+      }
+      lastScrollY.current = window.scrollY
+    }
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
   return (
-    <nav className="sticky top-0 z-50 bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg border-b border-gray-200 dark:border-gray-700">
+    <nav
+      ref={navRef}
+      className={`sticky top-0 z-50 bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg border-b border-gray-200 dark:border-gray-700 transition-transform duration-300 ${showNav ? '' : '-translate-y-full'}`}
+      onMouseEnter={() => setShowNav(true)}
+      onMouseLeave={() => setShowNav(false)}
+      style={window.location.pathname.startsWith('/meeting/') ? { position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50, opacity: showNav ? 1 : 0, pointerEvents: showNav ? 'auto' : 'none', transition: 'opacity 0.3s' } : {}}
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
           {/* Logo and brand */}

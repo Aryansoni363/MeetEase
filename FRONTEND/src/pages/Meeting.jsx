@@ -284,8 +284,9 @@ function Meeting() {
     if (!newMessage.trim() || !socket) return
 
     const messageData = {
-      roomId,
-      message: newMessage.trim(),
+      room: roomId,
+      text: newMessage.trim(),
+      sender: user.fullName || user.username,
       timestamp: new Date().toISOString()
     }
 
@@ -430,6 +431,22 @@ function Meeting() {
     }
   }
 
+  const controlsRef = useRef()
+  const [showControls, setShowControls] = useState(true)
+  useEffect(() => {
+    let timeoutId
+    const handleMouseMove = () => {
+      setShowControls(true)
+      clearTimeout(timeoutId)
+      timeoutId = setTimeout(() => setShowControls(false), 2000)
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      clearTimeout(timeoutId)
+    }
+  }, [])
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900">
@@ -454,18 +471,18 @@ function Meeting() {
               </code>
               <button
                 onClick={copyMeetingInfo}
-                className="text-gray-400 hover:text-gray-300 p-1"
+                className="text-gray-400 hover:text-gray-300 p-2 text-xl"
                 title="Copy meeting link"
               >
-                <Copy className="w-4 h-4" />
+                <Copy className="w-6 h-6" />
               </button>
             </div>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 text-gray-300 text-sm">
-            <Users className="w-4 h-4" />
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-gray-300 text-lg">
+            <Users className="w-6 h-6" />
             <span>{participants.length + 1}</span>
           </div>
           <button
@@ -473,9 +490,10 @@ function Meeting() {
               setIsChatOpen(!isChatOpen)
               if (!isChatOpen) setUnreadCount(0)
             }}
-            className="relative p-2 text-gray-400 hover:text-gray-300 hover:bg-gray-700 rounded-lg transition-colors"
+            className="relative p-3 text-gray-400 hover:text-gray-300 hover:bg-gray-700 rounded-full transition-colors text-2xl"
+            style={{ minWidth: 48, minHeight: 48 }}
           >
-            <MessageCircle className="w-5 h-5" />
+            <MessageCircle className="w-7 h-7" />
             {unreadCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
                 {unreadCount > 9 ? '9+' : unreadCount}
@@ -485,48 +503,46 @@ function Meeting() {
         </div>
       </div>
 
-      <div className="flex-1 flex">
+      <div className="flex-1 flex flex-row overflow-hidden" style={{height: 'calc(100vh - 56px - 64px)'}}>
         {/* Video Grid */}
-        <div className="flex-1 p-4">
-          <div className="h-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Local Video */}
-            <div className="relative bg-gray-800 rounded-lg overflow-hidden">
+        <div className="flex-1 p-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 h-full overflow-y-auto" style={{ minHeight: 0 }}>
+          {/* Local Video */}
+          <div className="relative bg-gray-800 rounded-lg overflow-hidden min-h-[180px] flex items-center justify-center">
+            <video
+              ref={localVideoRef}
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+              You {isScreenSharing && '(Screen)'}
+            </div>
+            {!isVideoOn && (
+              <div className="absolute inset-0 bg-gray-700 flex items-center justify-center">
+                <div className="w-16 h-16 bg-gray-600 rounded-full flex items-center justify-center">
+                  <span className="text-white text-xl font-semibold">
+                    {(user?.fullName?.charAt(0) || user?.username?.charAt(0) || 'U').toUpperCase()}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Remote Videos */}
+          {participants.map((participant) => (
+            <div key={participant.id} className="relative bg-gray-800 rounded-lg overflow-hidden min-h-[180px] flex items-center justify-center">
               <video
-                ref={localVideoRef}
+                ref={el => remoteVideosRef.current[participant.id] = el}
                 autoPlay
-                muted
                 playsInline
                 className="w-full h-full object-cover"
               />
               <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
-                You {isScreenSharing && '(Screen)'}
+                {participant.name}
               </div>
-              {!isVideoOn && (
-                <div className="absolute inset-0 bg-gray-700 flex items-center justify-center">
-                  <div className="w-16 h-16 bg-gray-600 rounded-full flex items-center justify-center">
-                    <span className="text-white text-xl font-semibold">
-                      {(user?.fullName?.charAt(0) || user?.username?.charAt(0) || 'U').toUpperCase()}
-                    </span>
-                  </div>
-                </div>
-              )}
             </div>
-
-            {/* Remote Videos */}
-            {participants.map((participant) => (
-              <div key={participant.id} className="relative bg-gray-800 rounded-lg overflow-hidden">
-                <video
-                  ref={el => remoteVideosRef.current[participant.id] = el}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
-                  {participant.name}
-                </div>
-              </div>
-            ))}
-          </div>
+          ))}
         </div>
 
         {/* Chat Sidebar */}
@@ -537,26 +553,25 @@ function Meeting() {
               animate={{ width: 320, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="bg-gray-800 border-l border-gray-700 flex flex-col"
+              className="bg-gray-800 border-l border-gray-700 flex flex-col h-full"
+              style={{ minHeight: 0 }}
             >
               <div className="p-4 border-b border-gray-700">
                 <h3 className="text-white font-semibold">Chat</h3>
               </div>
-
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {messages.map((message, index) => (
                   <div key={index} className="text-sm">
                     <div className="text-gray-400 text-xs mb-1">
-                      {message.userName} • {formatTime(message.timestamp)}
+                      {message.sender} • {formatTime(message.timestamp)}
                     </div>
                     <div className="text-gray-200">
-                      {message.message}
+                      {message.text}
                     </div>
                   </div>
                 ))}
               </div>
-
               {/* Message Input */}
               <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-700">
                 <div className="flex gap-2">
@@ -569,9 +584,9 @@ function Meeting() {
                   />
                   <button
                     type="submit"
-                    className="bg-primary-600 hover:bg-primary-700 text-white p-2 rounded-lg transition-colors"
+                    className="bg-primary-600 hover:bg-primary-700 text-white p-3 rounded-lg transition-colors text-lg"
                   >
-                    <Send className="w-4 h-4" />
+                    <Send className="w-5 h-5" />
                   </button>
                 </div>
               </form>
@@ -581,55 +596,53 @@ function Meeting() {
       </div>
 
       {/* Bottom Controls */}
-      <div className="bg-gray-800 border-t border-gray-700 p-4">
-        <div className="flex items-center justify-center gap-4">
-          <button
-            onClick={toggleMute}
-            className={`p-3 rounded-full transition-colors ${
-              isMuted
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-            }`}
-          >
-            {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          </button>
+      <div ref={controlsRef} className={`fixed left-1/2 bottom-8 -translate-x-1/2 z-50 bg-gray-800 border border-gray-700 rounded-full px-6 py-3 shadow-lg flex items-center gap-4 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <button
+          onClick={toggleMute}
+          className={`p-3 rounded-full transition-colors text-base ${
+            isMuted
+              ? 'bg-red-600 hover:bg-red-700 text-white'
+              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+          }`}
+        >
+          {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+        </button>
 
-          <button
-            onClick={toggleVideo}
-            className={`p-3 rounded-full transition-colors ${
-              !isVideoOn
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-            }`}
-          >
-            {isVideoOn ? <VideoIcon className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-          </button>
+        <button
+          onClick={toggleVideo}
+          className={`p-3 rounded-full transition-colors text-base ${
+            !isVideoOn
+              ? 'bg-red-600 hover:bg-red-700 text-white'
+              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+          }`}
+        >
+          {isVideoOn ? <VideoIcon className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+        </button>
 
-          <button
-            onClick={toggleScreenShare}
-            className={`p-3 rounded-full transition-colors ${
-              isScreenSharing
-                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-            }`}
-          >
-            {isScreenSharing ? <MonitorOff className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
-          </button>
+        <button
+          onClick={toggleScreenShare}
+          className={`p-3 rounded-full transition-colors text-base ${
+            isScreenSharing
+              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+          }`}
+        >
+          {isScreenSharing ? <MonitorOff className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
+        </button>
 
-          <button
-            onClick={leaveMeeting}
-            className="p-3 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors"
-          >
-            <Phone className="w-5 h-5" />
-          </button>
-        </div>
-
-        {screenSharingUser && screenSharingUser !== (user.fullName || user.username) && (
-          <div className="mt-2 text-center text-sm text-gray-400">
-            {screenSharingUser} is sharing their screen
-          </div>
-        )}
+        <button
+          onClick={leaveMeeting}
+          className="p-3 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors"
+        >
+          <Phone className="w-5 h-5" />
+        </button>
       </div>
+
+      {screenSharingUser && screenSharingUser !== (user.fullName || user.username) && (
+        <div className="mt-2 text-center text-sm text-gray-400">
+          {screenSharingUser} is sharing their screen
+        </div>
+      )}
     </div>
   )
 }

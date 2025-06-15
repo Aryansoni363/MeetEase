@@ -1,5 +1,5 @@
 /** @type {import('tailwindcss').Config} */
-export default {
+module.exports = {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -32,7 +32,10 @@ export default {
           800: '#1e293b',
           900: '#0f172a',
           950: '#020617',
-        }
+        },
+        border: '#e5e7eb', // Added border color for border-border class
+        background: '#ffffff', // Added background color for bg-background class
+        foreground: '#111827', // Added foreground color for text-foreground class
       },
       animation: {
         'fade-in': 'fadeIn 0.5s ease-in-out',
