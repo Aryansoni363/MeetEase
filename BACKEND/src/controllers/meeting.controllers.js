@@ -19,7 +19,7 @@ const generateMeetingCode = () => {
 };
 
 // Get roomId from a meeting code
- const getRoomIdFromMeetingCode = asyncHandler(async (req, res) => {
+const getRoomIdFromMeetingCode = asyncHandler(async (req, res) => {
   logger.info("getRoomIdFromMeetingCode invoked", {
     correlationId: req.correlationId,
     meetingCode: req.params.meetingCode,
@@ -133,18 +133,24 @@ const leaveMeeting = asyncHandler(async (req, res) => {
   });
 
   const { roomId } = req.params;
-  const meeting = await Meeting.findOne({ roomId });
+  
+  // Update meeting by removing this user from the participants array atomically.
+  const meeting = await Meeting.findOneAndUpdate(
+    { roomId },
+    { $pull: { participants: { user: req.user._id } } },
+    { new: true }
+  );
+
   if (!meeting) {
     logger.error("Meeting not found", { roomId });
     throw new ApiError(404, "Meeting not found");
   }
 
-  meeting.participants = meeting.participants.filter(
-    (p) => p.user.toString() !== req.user._id.toString()
-  );
-  await meeting.save();
-
-  logger.info("User left meeting", { roomId, userId: req.user._id });
+  logger.info("User left meeting", {
+    roomId,
+    userId: req.user._id,
+    remainingParticipants: meeting.participants,
+  });
   return res.status(200).json(new ApiResponse(200, { roomId }, "Left meeting successfully"));
 });
 
@@ -183,10 +189,22 @@ const postMessage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Message text is required");
   }
 
+  // Verify that the meeting exists
   const meeting = await Meeting.findOne({ roomId });
   if (!meeting) {
     logger.error("Meeting not found", { roomId });
     throw new ApiError(404, "Meeting not found");
+  }
+
+  // Ensure the user is a participant in the meeting
+  const isParticipant = meeting.participants.some(
+    (p) => p.user.toString() === req.user._id.toString()
+  );
+  // Uncomment the following line for extra debugging:
+  // logger.info("Current participants", { participants: meeting.participants.map(p => p.user.toString()) });
+  if (!isParticipant) {
+    logger.error("User not a participant in the meeting", { roomId, userId: req.user._id });
+    throw new ApiError(403, "User is not a participant of the meeting");
   }
 
   const message = {

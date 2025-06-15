@@ -1,6 +1,3 @@
-// backend/src/socket/index.js
-
-// backend/src/socket/index.js
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import { Meeting } from "../models/meeting.models.js";
@@ -11,9 +8,7 @@ const JWT_SECRET = process.env.ACCESS_TOKEN_SECRET;
 export default function initializeSocket(server) {
   const io = new Server(server, {
     cors: {
-      origin: process.env.CORS_ORIGIN
-        ? process.env.CORS_ORIGIN.split(",")
-        : "*",
+      origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : "*",
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -60,8 +55,14 @@ export default function initializeSocket(server) {
       io.in(room).emit("room:participants", { participants });
     });
 
+    // Updated to send the sender's name
     socket.on("send-message", async ({ room, text }) => {
-      const msg = { senderId: socket.user._id, text, timestamp: new Date() };
+      const msg = {
+        senderId: socket.user._id,
+        senderName: socket.user.username, // New field for sender's name.
+        text,
+        timestamp: new Date(),
+      };
       io.in(room).emit("receive-message", msg);
       try {
         const meeting = await Meeting.findOne({ roomId: room });
