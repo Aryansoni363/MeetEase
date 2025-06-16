@@ -80,9 +80,9 @@ function Dashboard() {
     setIsCreating(true);
     try {
       const response = await meetingService.createMeeting(start, end);
-      if (response.success && response.data?.roomId) {
+      if (response.success && response.data?.meetingCode) {
         toast.success('Meeting created successfully!')
-        navigate(`/prejoin/${response.data.roomId}`)
+        navigate(`/prejoin/${response.data.meetingCode}`)
       }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to create meeting')
@@ -103,8 +103,8 @@ function Dashboard() {
     setIsJoining(true)
     try {
       const response = await meetingService.joinMeeting(codeToUse)
-      if (response.success && response.data?.roomId) {
-        navigate(`/meeting/${response.data.roomId}`)
+      if (response.success && response.data?.meetingCode) {
+        navigate(`/meeting/${response.data.meetingCode}`)
       }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to join meeting')
@@ -122,9 +122,9 @@ function Dashboard() {
     }
   }
 
-  const handleCopyMeetingLink = async (roomId, meetingCode) => {
+  const handleCopyMeetingLink = async (meetingCode) => {
     try {
-      const link = `${window.location.origin}/meeting/${roomId}`
+      const link = `${window.location.origin}/meeting/${meetingCode}`
       await copyToClipboard(link)
       toast.success('Meeting link copied to clipboard!')
     } catch (error) {
@@ -133,8 +133,7 @@ function Dashboard() {
   }
 
   const filteredMeetings = meetings.filter(meeting =>
-    meeting.meetingCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    meeting.roomId?.toLowerCase().includes(searchTerm.toLowerCase())
+    meeting.meetingCode?.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   if (isLoading) {
@@ -346,9 +345,6 @@ function Dashboard() {
                           <h3 className="font-medium text-gray-900 dark:text-white">
                             Meeting {meeting.meetingCode}
                           </h3>
-                          <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 px-2 py-1 rounded-full">
-                            {meeting.roomId}
-                          </span>
                         </div>
                         <div className="flex items-center gap-4 mt-1 text-sm text-gray-600 dark:text-gray-400">
                           <span>{formatDate(meeting.startTime)}</span>
@@ -369,7 +365,7 @@ function Dashboard() {
                         <Copy className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => handleCopyMeetingLink(meeting.roomId, meeting.meetingCode)}
+                        onClick={() => handleCopyMeetingLink(meeting.meetingCode)}
                         className="p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
                         title="Copy meeting link"
                       >
@@ -377,7 +373,7 @@ function Dashboard() {
                       </button>
                       {!meeting.endTime && (
                         <button
-                          onClick={() => navigate(`/meeting/${meeting.roomId}`)}
+                          onClick={() => navigate(`/meeting/${meeting.meetingCode}`)}
                           className="btn-primary px-4 py-2 text-sm"
                         >
                           Rejoin

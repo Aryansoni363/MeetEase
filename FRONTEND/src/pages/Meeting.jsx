@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -25,7 +25,7 @@ import LoadingSpinner from '../components/LoadingSpinner'
 import toast from 'react-hot-toast'
 
 function Meeting() {
-  const { roomId } = useParams()
+  const { meetingCode } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
   const { socket, isConnected } = useSocket()
@@ -34,17 +34,24 @@ function Meeting() {
   const localVideoRef = useRef()
   const localStreamRef = useRef()
   const screenStreamRef = useRef()
-  const peerConnectionsRef = useRef({})
-  const remoteVideosRef = useRef({})
+  const peerConnectionsRef = useRef({}) // socketId -> RTCPeerConnection
+  const remoteVideosRef = useRef({}) // socketId -> video element
+  const remoteStreamsRef = useRef({}); // socketId -> MediaStream
 
   // State
   const [meetingInfo, setMeetingInfo] = useState(null)
+  const [roomId, setRoomId] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [participants, setParticipants] = useState([])
+  // Use socketId as the unique key for participants and peer connections
+  const [participants, setParticipants] = useState([]); // [{ socketId, userId, name }]
+  const [socketIdToUser, setSocketIdToUser] = useState({}); // { socketId: { userId, name } }
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [isChatOpen, setIsChatOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [showMeetingCode, setShowMeetingCode] = useState(true)
+  const [isParticipantsOpen, setIsParticipantsOpen] = useState(false)
+  const [participantNames, setParticipantNames] = useState({}); // userId -> userName
 
   // Media controls
   const [isMuted, setIsMuted] = useState(false)
@@ -62,22 +69,31 @@ function Meeting() {
 
   // Initialize meeting
   useEffect(() => {
-    if (roomId) {
+    if (meetingCode) {
       initializeMeeting()
     }
 
     return () => {
       cleanup()
     }
-  }, [roomId])
+  }, [meetingCode])
 
   // Socket event listeners
   useEffect(() => {
-    if (!socket || !isConnected) return
-
+    if (!socket || !isConnected || !roomId) return;
     // Join the meeting room
-    socket.emit('join-room', { roomId, user: { id: user._id, name: user.fullName || user.username } })
-
+    console.log('[Socket] Emitting join-room', { userId: user._id, roomId });
+    socket.emit('join-room', { room: roomId, user: { id: user._id, name: user.fullName || user.username } })
+    // Listen for user-connected event (for legacy, but do not update participants here)
+    const handleUserConnected = (data) => {
+      console.log('[Socket] Received user-connected', data);
+      // Only update socketIdToUser mapping for signaling
+      setSocketIdToUser(prev => ({ ...prev, [data.socketId]: { userId: data.userId, name: data.userName } }));
+    };
+    socket.on('user-connected', handleUserConnected);
+    return () => {
+      socket.off('user-connected', handleUserConnected);
+    };
     // WebRTC signaling
     socket.on('user-joined-webrtc', handleUserJoined)
     socket.on('webrtc-offer', handleOffer)
@@ -104,13 +120,49 @@ function Meeting() {
     }
   }, [socket, isConnected, roomId, user])
 
+  // Listen for deduplicated participants list from backend
+  useEffect(() => {
+    if (!socket) return;
+    const handleRoomParticipants = ({ participants }) => {
+      setParticipants(participants);
+      // Also update socketIdToUser mapping
+      const mapping = {};
+      participants.forEach(p => {
+        mapping[p.socketId] = { userId: p.userId, name: p.name };
+      });
+      setSocketIdToUser(mapping);
+    };
+    socket.on('room:participants', handleRoomParticipants);
+    return () => socket.off('room:participants', handleRoomParticipants);
+  }, [socket]);
+
+  // Listen for all-users and create offers for each (socket IDs)
+  useEffect(() => {
+    if (!socket) return;
+    const handleAllUsers = (socketIds) => {
+      socketIds.forEach(socketId => {
+        if (socketId !== socket.id) {
+          // Only create offer if not self
+          handleUserJoined({ socketId });
+        }
+      });
+    };
+    socket.on('all-users', handleAllUsers);
+    return () => socket.off('all-users', handleAllUsers);
+  }, [socket, participantNames]);
+
   const initializeMeeting = async () => {
     try {
-      // Get meeting info (you might need to implement this endpoint)
-      setMeetingInfo({ roomId, meetingCode: 'LOADING...' })
+      // Join meeting by code, get roomId from backend
+      const joinResponse = await meetingService.joinMeeting(meetingCode)
+      if (!joinResponse.success || !joinResponse.data?.roomId) {
+        throw new Error('Invalid meeting code')
+      }
+      setRoomId(joinResponse.data.roomId)
+      setMeetingInfo({ roomId: joinResponse.data.roomId, meetingCode: joinResponse.data.meetingCode })
 
       // Load existing messages
-      const messagesResponse = await meetingService.getMessages(roomId)
+      const messagesResponse = await meetingService.getMessages(joinResponse.data.roomId)
       if (messagesResponse.success) {
         setMessages(messagesResponse.data || [])
       }
@@ -131,15 +183,9 @@ function Meeting() {
         video: true,
         audio: true
       })
-
       localStreamRef.current = stream
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream
-      }
-
-      // Join WebRTC room
-      if (socket) {
-        socket.emit('join-webrtc-room', { roomId })
       }
     } catch (error) {
       toast.error('Failed to access camera and microphone')
@@ -147,112 +193,131 @@ function Meeting() {
     }
   }
 
-  const createPeerConnection = (userId) => {
-    const peerConnection = new RTCPeerConnection(rtcConfig)
+  // Helper: Ensure only one peer connection per socketId
+  const getOrCreatePeerConnection = (socketId) => {
+    if (peerConnectionsRef.current[socketId]) {
+      console.log(`[WebRTC] Reusing peer connection for socket ${socketId}`);
+      return peerConnectionsRef.current[socketId];
+    }
+    console.log(`[WebRTC] Creating new peer connection for socket ${socketId}`);
+    const peerConnection = new RTCPeerConnection(rtcConfig);
 
     // Add local stream to peer connection
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStreamRef.current)
-      })
+        console.log(`[WebRTC] Adding local track (${track.kind}) to peer connection for socket ${socketId}`);
+        peerConnection.addTrack(track, localStreamRef.current);
+      });
     }
 
     // Handle remote stream
     peerConnection.ontrack = (event) => {
-      const remoteStream = event.streams[0]
-      if (remoteVideosRef.current[userId]) {
-        remoteVideosRef.current[userId].srcObject = remoteStream
+      const remoteStream = event.streams[0];
+      console.log(`[WebRTC] Received remote stream from socket ${socketId}`, remoteStream);
+      remoteStreamsRef.current[socketId] = remoteStream;
+      // Try to attach to video element if it exists
+      if (remoteVideosRef.current[socketId]) {
+        remoteVideosRef.current[socketId].srcObject = remoteStream;
+        console.log(`[WebRTC] Attached remote stream to video element for socket ${socketId}`);
+      } else {
+        console.warn(`[WebRTC] No video element found for socket ${socketId} when attaching remote stream (will attach on render)`);
       }
     }
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
       if (event.candidate && socket) {
-        socket.emit('ice-candidate', {
-          roomId,
-          candidate: event.candidate,
-          targetUserId: userId
+        console.log(`[WebRTC] Sending ICE candidate to ${socketId}`, event.candidate);
+        socket.emit('webrtc-ice-candidate', {
+          to: socketId,
+          candidate: event.candidate
         })
       }
     }
 
-    peerConnectionsRef.current[userId] = peerConnection
+    peerConnectionsRef.current[socketId] = peerConnection
     return peerConnection
   }
 
   // WebRTC event handlers
-  const handleUserJoined = async ({ userId, userName }) => {
+  const handleUserJoined = async ({ socketId }) => {
+    // Add to participants if not present
     setParticipants(prev => {
-      if (!prev.find(p => p.id === userId)) {
-        return [...prev, { id: userId, name: userName }]
+      if (!prev.find(p => p.socketId === socketId)) {
+        return [...prev, { socketId, userId: socketIdToUser[socketId]?.userId, name: socketIdToUser[socketId]?.name || 'Participant' }];
       }
-      return prev
-    })
-
-    // Create offer for new user
-    const peerConnection = createPeerConnection(userId)
-    try {
-      const offer = await peerConnection.createOffer()
-      await peerConnection.setLocalDescription(offer)
-
-      if (socket) {
-        socket.emit('webrtc-offer', {
-          roomId,
-          offer,
-          targetUserId: userId
-        })
-      }
-    } catch (error) {
-      console.error('Error creating offer:', error)
-    }
-  }
-
-  const handleOffer = async ({ offer, fromUserId, fromUserName }) => {
-    const peerConnection = createPeerConnection(fromUserId)
-
-    try {
-      await peerConnection.setRemoteDescription(offer)
-      const answer = await peerConnection.createAnswer()
-      await peerConnection.setLocalDescription(answer)
-
-      if (socket) {
-        socket.emit('webrtc-answer', {
-          roomId,
-          answer,
-          targetUserId: fromUserId
-        })
-      }
-
-      setParticipants(prev => {
-        if (!prev.find(p => p.id === fromUserId)) {
-          return [...prev, { id: fromUserId, name: fromUserName }]
+      return prev;
+    });
+    // Only create offer if this client is not the new user
+    if (socketId !== socket.id) {
+      const peerConnection = getOrCreatePeerConnection(socketId);
+      try {
+        console.log(`[WebRTC] Creating offer for socket ${socketId}`);
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        if (socket) {
+          console.log(`[WebRTC] Emitting webrtc-offer to ${socketId}`);
+          socket.emit('webrtc-offer', {
+            to: socketId,
+            offer
+          });
         }
-        return prev
-      })
+      } catch (error) {
+        console.error('[WebRTC] Error creating offer:', error);
+      }
+    }
+  }
+
+  const handleOffer = async ({ offer, from }) => {
+    const peerConnection = getOrCreatePeerConnection(from);
+    try {
+      console.log(`[WebRTC] Received offer from ${from}, setting remote description and creating answer`);
+      await peerConnection.setRemoteDescription(offer);
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      if (socket) {
+        console.log(`[WebRTC] Emitting webrtc-answer to ${from}`);
+        socket.emit('webrtc-answer', {
+          to: from,
+          answer
+        });
+      }
+      setParticipants(prev => {
+        if (!prev.find(p => p.socketId === from)) {
+          return [...prev, { socketId: from, userId: socketIdToUser[from]?.userId, name: socketIdToUser[from]?.name || 'Participant' }];
+        }
+        return prev;
+      });
     } catch (error) {
-      console.error('Error handling offer:', error)
+      console.error('[WebRTC] Error handling offer:', error);
     }
   }
 
-  const handleAnswer = async ({ answer, fromUserId }) => {
-    const peerConnection = peerConnectionsRef.current[fromUserId]
+  const handleAnswer = async ({ answer, from }) => {
+    const peerConnection = peerConnectionsRef.current[from];
     if (peerConnection) {
       try {
-        await peerConnection.setRemoteDescription(answer)
+        console.log(`[WebRTC] Received answer from ${from}, setting remote description`);
+        await peerConnection.setRemoteDescription(answer);
       } catch (error) {
-        console.error('Error handling answer:', error)
+        console.error('[WebRTC] Error handling answer:', error);
       }
+    } else {
+      console.warn(`[WebRTC] No peer connection found for socket ${from} when handling answer`);
     }
   }
 
-  const handleIceCandidate = async ({ candidate, fromUserId }) => {
-    const peerConnection = peerConnectionsRef.current[fromUserId]
+  const handleIceCandidate = async ({ candidate, from }) => {
+    const peerConnection = peerConnectionsRef.current[from];
     if (peerConnection) {
       try {
-        await peerConnection.addIceCandidate(candidate)
+        console.log(`[WebRTC] Adding ICE candidate from ${from}`, candidate);
+        await peerConnection.addIceCandidate(candidate);
       } catch (error) {
-        console.error('Error handling ICE candidate:', error)
+        console.error('[WebRTC] Error handling ICE candidate:', error);
       }
+    } else {
+      console.warn(`[WebRTC] No peer connection found for socket ${from} when handling ICE candidate`);
     }
   }
 
@@ -272,31 +337,32 @@ function Meeting() {
   }
 
   // Chat handlers
-  const handleReceiveMessage = (messageData) => {
-    setMessages(prev => [...prev, messageData])
-    if (!isChatOpen) {
-      setUnreadCount(prev => prev + 1)
-    }
-  }
+  useEffect(() => {
+    if (!socket) return;
+    const handleReceiveMessage = (messageData) => {
+      console.log('[Socket] Received receive-message event:', messageData);
+      setMessages(prev => [...prev, messageData]);
+      if (!isChatOpen) {
+        setUnreadCount(prev => prev + 1);
+      }
+    };
+    socket.on('receive-message', handleReceiveMessage);
+    return () => socket.off('receive-message', handleReceiveMessage);
+  }, [socket, isChatOpen]);
 
-  const handleSendMessage = async (e) => {
-    e.preventDefault()
-    if (!newMessage.trim() || !socket) return
-
+  const handleSendMessage = (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !socket) return;
     const messageData = {
       room: roomId,
       text: newMessage.trim(),
-      sender: user.fullName || user.username,
-      timestamp: new Date().toISOString()
-    }
-
-    try {
-      await meetingService.postMessage(roomId, newMessage.trim())
-      socket.emit('send-message', messageData)
-      setNewMessage('')
-    } catch (error) {
-      toast.error('Failed to send message')
-    }
+      timestamp: new Date().toISOString(),
+      senderName: user.fullName || user.username
+    };
+    // Do NOT optimistically add message to UI here; let receive-message handle it
+    console.log('[Socket] Emitting send-message', messageData);
+    socket.emit('send-message', messageData);
+    setNewMessage('');
   }
 
   // Media control handlers
@@ -401,15 +467,8 @@ function Meeting() {
     }
   }
 
-  const copyMeetingInfo = async () => {
-    try {
-      const meetingLink = `${window.location.origin}/meeting/${roomId}`
-      await copyToClipboard(meetingLink)
-      toast.success('Meeting link copied to clipboard!')
-    } catch (error) {
-      toast.error('Failed to copy meeting link')
-    }
-  }
+  // Only show the 8-digit meeting code in the UI, never the internal roomId
+  const displayMeetingCode = meetingInfo?.meetingCode || '';
 
   const cleanup = () => {
     // Stop local streams
@@ -431,21 +490,16 @@ function Meeting() {
     }
   }
 
-  const controlsRef = useRef()
-  const [showControls, setShowControls] = useState(true)
-  useEffect(() => {
-    let timeoutId
-    const handleMouseMove = () => {
-      setShowControls(true)
-      clearTimeout(timeoutId)
-      timeoutId = setTimeout(() => setShowControls(false), 2000)
-    }
-    window.addEventListener('mousemove', handleMouseMove)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      clearTimeout(timeoutId)
-    }
-  }, [])
+  // Compute dynamic grid classes for video area
+  const videoCount = 1 + participants.length;
+  const videoGridClass = useMemo(() => {
+    if (videoCount === 1) return 'grid-cols-1';
+    if (videoCount === 2) return 'grid-cols-2';
+    if (videoCount <= 4) return 'grid-cols-2 grid-rows-2';
+    if (videoCount <= 9) return 'grid-cols-3 grid-rows-3';
+    return 'grid-cols-4';
+  }, [videoCount]);
+  const isScrollableGrid = videoCount > 9;
 
   if (isLoading) {
     return (
@@ -456,58 +510,48 @@ function Meeting() {
   }
 
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h1 className="text-white font-semibold">
-            Meeting Room
-          </h1>
-          {meetingInfo?.meetingCode && (
-            <div className="flex items-center gap-2">
-              <span className="text-gray-300 text-sm">Code:</span>
-              <code className="bg-gray-700 text-green-400 px-2 py-1 rounded text-sm">
-                {meetingInfo.meetingCode}
-              </code>
-              <button
-                onClick={copyMeetingInfo}
-                className="text-gray-400 hover:text-gray-300 p-2 text-xl"
-                title="Copy meeting link"
-              >
-                <Copy className="w-6 h-6" />
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-gray-300 text-lg">
-            <Users className="w-6 h-6" />
-            <span>{participants.length + 1}</span>
-          </div>
-          <button
-            onClick={() => {
-              setIsChatOpen(!isChatOpen)
-              if (!isChatOpen) setUnreadCount(0)
-            }}
-            className="relative p-3 text-gray-400 hover:text-gray-300 hover:bg-gray-700 rounded-full transition-colors text-2xl"
-            style={{ minWidth: 48, minHeight: 48 }}
-          >
-            <MessageCircle className="w-7 h-7" />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
+    <div className="flex flex-col md:flex-row h-screen w-full overflow-hidden">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col bg-black h-screen relative">
+        {/* Top Bar */}
+        <div className="w-full flex items-center justify-between px-6 py-3 bg-gray-900/80 border-b border-gray-800 z-20">
+          <div className="flex items-center gap-2">
+            <span className="text-white font-semibold text-sm">Meeting Code:</span>
+            {showMeetingCode ? (
+              <span className="text-primary-400 font-mono text-xs bg-gray-800 px-2 py-1 rounded">{displayMeetingCode}</span>
+            ) : (
+              <span className="text-gray-500 font-mono text-xs bg-gray-800 px-2 py-1 rounded">••••••••</span>
             )}
-          </button>
+            <button onClick={() => setShowMeetingCode(v => !v)} className="ml-1 text-primary-400 hover:text-primary-300" title={showMeetingCode ? 'Hide code' : 'Show code'}>
+              <MoreVertical className="w-4 h-4" />
+            </button>
+            <button onClick={async () => {
+              try {
+                const meetingLink = `${window.location.origin}/meeting/${displayMeetingCode}`;
+                await copyToClipboard(meetingLink);
+                toast.success('Meeting link copied to clipboard!');
+              } catch (error) {
+                toast.error('Failed to copy meeting link');
+              }
+            }} className="ml-2 text-primary-400 hover:text-primary-300" title="Copy meeting link">
+              <Copy className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setIsChatOpen((v) => !v)} className="text-white hover:text-primary-400 px-3 py-1 rounded transition-colors" title="Toggle Chat">
+              <MessageCircle className="w-5 h-5" />
+              {unreadCount > 0 && <span className="ml-1 text-xs text-primary-400">({unreadCount})</span>}
+            </button>
+            <button onClick={() => setIsParticipantsOpen(v => !v)} className="text-white hover:text-primary-400 px-3 py-1 rounded transition-colors" title="Show Participants">
+              <Users className="w-5 h-5" />
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="flex-1 flex flex-row overflow-hidden" style={{height: 'calc(100vh - 56px - 64px)'}}>
         {/* Video Grid */}
-        <div className="flex-1 p-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 h-full overflow-y-auto" style={{ minHeight: 0 }}>
+        <div className={`flex-1 p-4 grid gap-4 ${videoGridClass} ${isScrollableGrid ? 'overflow-y-auto' : ''}`} style={{minHeight:0}}>
           {/* Local Video */}
-          <div className="relative bg-gray-800 rounded-lg overflow-hidden min-h-[180px] flex items-center justify-center">
+          <div className="relative bg-gray-800 rounded-lg overflow-hidden">
             <video
               ref={localVideoRef}
               autoPlay
@@ -528,12 +572,17 @@ function Meeting() {
               </div>
             )}
           </div>
-
           {/* Remote Videos */}
           {participants.map((participant) => (
-            <div key={participant.id} className="relative bg-gray-800 rounded-lg overflow-hidden min-h-[180px] flex items-center justify-center">
+            <div key={participant.socketId} className="relative bg-gray-800 rounded-lg overflow-hidden">
               <video
-                ref={el => remoteVideosRef.current[participant.id] = el}
+                ref={el => {
+                  remoteVideosRef.current[participant.socketId] = el;
+                  // Attach stream if it exists
+                  if (el && remoteStreamsRef.current[participant.socketId]) {
+                    el.srcObject = remoteStreamsRef.current[participant.socketId];
+                  }
+                }}
                 autoPlay
                 playsInline
                 className="w-full h-full object-cover"
@@ -545,104 +594,137 @@ function Meeting() {
           ))}
         </div>
 
-        {/* Chat Sidebar */}
-        <AnimatePresence>
-          {isChatOpen && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 320, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="bg-gray-800 border-l border-gray-700 flex flex-col h-full"
-              style={{ minHeight: 0 }}
-            >
-              <div className="p-4 border-b border-gray-700">
-                <h3 className="text-white font-semibold">Chat</h3>
-              </div>
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {messages.map((message, index) => (
-                  <div key={index} className="text-sm">
-                    <div className="text-gray-400 text-xs mb-1">
-                      {message.sender} • {formatTime(message.timestamp)}
-                    </div>
-                    <div className="text-gray-200">
-                      {message.text}
-                    </div>
+        {/* Bottom Controller Bar */}
+        <div className="w-full flex items-center justify-center gap-4 px-6 py-3 bg-gray-900/80 border-t border-gray-800 z-20 absolute left-0 bottom-0">
+          <button onClick={toggleMute} className={`p-3 rounded-full transition-colors ${isMuted ? 'bg-red-600' : 'bg-gray-700'} text-white`} title={isMuted ? 'Unmute' : 'Mute'}>
+            {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+          </button>
+          <button onClick={toggleVideo} className={`p-3 rounded-full transition-colors ${!isVideoOn ? 'bg-red-600' : 'bg-gray-700'} text-white`} title={isVideoOn ? 'Turn Off Video' : 'Turn On Video'}>
+            {isVideoOn ? <VideoIcon className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+          </button>
+          <button onClick={toggleScreenShare} className={`p-3 rounded-full transition-colors ${isScreenSharing ? 'bg-primary-600' : 'bg-gray-700'} text-white`} title={isScreenSharing ? 'Stop Sharing' : 'Share Screen'}>
+            {isScreenSharing ? <MonitorOff className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
+          </button>
+          <button onClick={leaveMeeting} className="p-3 rounded-full bg-red-700 text-white hover:bg-red-800 transition-colors" title="Leave Meeting">
+            <Phone className="w-5 h-5 rotate-135" />
+          </button>
+        </div>
+      </div>
+
+      {/* Chat Sidebar */}
+      {isChatOpen && (
+        <motion.div
+          className="bg-gray-800 border-l border-gray-700 flex flex-col w-full md:w-96 max-w-full h-[60vh] md:h-full"
+          initial={{ width: 0, opacity: 0 }}
+          animate={{ width: 320, opacity: 1 }}
+          exit={{ width: 0, opacity: 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          <div className="p-4 border-b border-gray-700">
+            <h3 className="text-white font-semibold">Chat</h3>
+          </div>
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+            {messages.map((message, index) => {
+              // Safely extract sender name
+              let displayName = message.senderName || message.userName;
+              if (!displayName) {
+                if (typeof message.sender === 'string') {
+                  displayName = message.sender;
+                } else if (typeof message.sender === 'object' && message.sender.username) {
+                  displayName = message.sender.username;
+                } else {
+                  displayName = 'Unknown';
+                }
+              }
+              // Safely extract message body
+              let messageBody = message.text || message.message;
+              if (typeof messageBody !== 'string') {
+                messageBody = JSON.stringify(messageBody);
+              }
+              return (
+                <div key={index} className="text-sm">
+                  <div className="text-gray-400 text-xs mb-1">
+                    {displayName} • {formatTime(message.timestamp)}
+                  </div>
+                  <div className="text-gray-200">
+                    {messageBody}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Message Input */}
+          <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-700">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder="Type a message..."
+                className="flex-1 bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary-500"
+              />
+              <button
+                type="submit"
+                className="bg-primary-600 hover:bg-primary-700 text-white p-2 rounded-lg transition-colors"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </form>
+        </motion.div>
+      )}
+
+      {/* Participant Sidebar */}
+      <AnimatePresence>
+        {isParticipantsOpen && (
+          <motion.div
+            className="fixed top-0 right-0 h-full w-full max-w-xs bg-gray-900 border-l border-gray-800 shadow-2xl z-50 flex flex-col"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+              <h3 className="text-white font-semibold text-lg">Participants</h3>
+              <button onClick={() => setIsParticipantsOpen(false)} className="text-gray-400 hover:text-white p-1 rounded" title="Close">
+                <span className="text-xl">&times;</span>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {participants.length === 0 && (
+                <div className="text-gray-400 text-center">No other participants yet.</div>
+              )}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2">
+                  <span className="w-8 h-8 flex items-center justify-center rounded-full bg-primary-700 text-white font-bold">
+                    {(user?.fullName?.charAt(0) || user?.username?.charAt(0) || 'U').toUpperCase()}
+                  </span>
+                  <span className="text-white font-medium">{user?.fullName || user?.username || 'You'}</span>
+                  <span className="ml-auto text-xs text-primary-400">(You)</span>
+                </div>
+                {participants.map((participant) => (
+                  <div key={participant.socketId} className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2">
+                    <span className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-700 text-white font-bold">
+                      {participant.name?.charAt(0)?.toUpperCase() || 'U'}
+                    </span>
+                    <span className="text-white font-medium">{participant.name}</span>
                   </div>
                 ))}
               </div>
-              {/* Message Input */}
-              <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-700">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder="Type a message..."
-                    className="flex-1 bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary-500"
-                  />
-                  <button
-                    type="submit"
-                    className="bg-primary-600 hover:bg-primary-700 text-white p-3 rounded-lg transition-colors text-lg"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Bottom Controls */}
-      <div ref={controlsRef} className={`fixed left-1/2 bottom-8 -translate-x-1/2 z-50 bg-gray-800 border border-gray-700 rounded-full px-6 py-3 shadow-lg flex items-center gap-4 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-        <button
-          onClick={toggleMute}
-          className={`p-3 rounded-full transition-colors text-base ${
-            isMuted
-              ? 'bg-red-600 hover:bg-red-700 text-white'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-          }`}
-        >
-          {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-        </button>
-
-        <button
-          onClick={toggleVideo}
-          className={`p-3 rounded-full transition-colors text-base ${
-            !isVideoOn
-              ? 'bg-red-600 hover:bg-red-700 text-white'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-          }`}
-        >
-          {isVideoOn ? <VideoIcon className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-        </button>
-
-        <button
-          onClick={toggleScreenShare}
-          className={`p-3 rounded-full transition-colors text-base ${
-            isScreenSharing
-              ? 'bg-blue-600 hover:bg-blue-700 text-white'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-          }`}
-        >
-          {isScreenSharing ? <MonitorOff className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
-        </button>
-
-        <button
-          onClick={leaveMeeting}
-          className="p-3 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors"
-        >
-          <Phone className="w-5 h-5" />
-        </button>
-      </div>
-
-      {screenSharingUser && screenSharingUser !== (user.fullName || user.username) && (
-        <div className="mt-2 text-center text-sm text-gray-400">
-          {screenSharingUser} is sharing their screen
-        </div>
-      )}
+      {/* Responsive adjustments for mobile */}
+      <style>{`
+        @media (max-width: 768px) {
+          .md\\:flex-row { flex-direction: column !important; }
+          .md\\:h-full { height: auto !important; }
+          .md\\:w-96 { width: 100% !important; }
+        }
+      `}</style>
     </div>
   )
 }

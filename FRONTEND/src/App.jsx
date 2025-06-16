@@ -18,15 +18,13 @@ import PreJoin from './pages/PreJoin'
 import NotFound from './pages/NotFound'
 
 function App() {
-  const location = window.location.pathname;
-  const isMeetingPage = location.startsWith('/meeting/');
   return (
     <ThemeProvider>
       <AuthProvider>
         <SocketProvider>
           <Router>
             <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-950 dark:via-gray-900 dark:to-blue-950 transition-colors duration-300">
-              {!isMeetingPage && <Navbar />}
+              <Navbar />
               <main className="pb-16">
                 <Routes>
                   {/* Public Routes */}
@@ -41,6 +39,7 @@ function App() {
                       <Register />
                     </PublicRoute>
                   } />
+                  <Route path="/prejoin/:meetingCode" element={<PreJoin />} />
 
                   {/* Protected Routes */}
                   <Route path="/dashboard" element={
@@ -53,12 +52,7 @@ function App() {
                       <Profile />
                     </ProtectedRoute>
                   } />
-                  <Route path="/prejoin/:roomId" element={
-                    <ProtectedRoute>
-                      <PreJoin />
-                    </ProtectedRoute>
-                  } />
-                  <Route path="/meeting/:roomId" element={
+                  <Route path="/meeting/:meetingCode" element={
                     <ProtectedRoute>
                       <Meeting />
                     </ProtectedRoute>

@@ -30,33 +30,69 @@ export default function initializeSocket(server) {
     });
   });
 
-  // Utility function to list chat participants in a room
+  // Utility function to list chat participants in a room (deduplicated by userId, keep latest socketId)
   const getChatParticipants = (room) => {
     const clients = io.sockets.adapter.rooms.get(room) || new Set();
-    return Array.from(clients)
-      .map((socketId) => {
-        const s = io.sockets.sockets.get(socketId);
-        return s && s.user ? { userId: s.user._id } : null;
-      })
-      .filter(Boolean);
+    const userMap = new Map();
+    Array.from(clients).forEach((socketId) => {
+      const s = io.sockets.sockets.get(socketId);
+      if (s && s.user) {
+        // Always use the latest socketId for a userId
+        userMap.set(s.user._id, {
+          userId: s.user._id,
+          socketId: s.id,
+          name: s.user.fullName || s.user.username
+        });
+      }
+    });
+    return Array.from(userMap.values());
   };
 
   // WebRTC room tracker: roomId → Set of socket ids
   const webrtcRooms = {};
 
+  // In-memory rate limiter: socket.id -> { count, lastReset }
+  const MESSAGE_LIMIT = 5; // max messages
+  const TIME_WINDOW_MS = 5000; // per 5 seconds
+  const rateLimitMap = new Map();
+
   io.on("connection", (socket) => {
     logger.info(`WS connected: ${socket.id} (user ${socket.user._id})`);
 
     // ── CHAT EVENTS ─────────────────────────────────────────────
-    socket.on("join-room", ({ room }) => {
+    socket.on("join-room", ({ room, user }) => {
+      logger.info(`[Socket] Backend received join-room`, { userId: socket.user._id, room, socketId: socket.id });
       socket.join(room);
       const participants = getChatParticipants(room);
       logger.info(`User ${socket.user._id} joined chat room ${room}`, { participants });
+      // Emit user-connected to all including the joining user (for legacy, can be removed later)
+      io.in(room).emit("user-connected", {
+        userId: socket.user._id,
+        userName: socket.user.fullName || socket.user.username,
+        room,
+        socketId: socket.id
+      });
+      // Emit deduplicated participants list
       io.in(room).emit("room:participants", { participants });
     });
 
     // Updated to send the sender's name
     socket.on("send-message", async ({ room, text, timestamp }) => {
+      logger.info(`[Socket] Received send-message from user ${socket.user._id} in room ${room}: ${text}`);
+      // Rate limiting logic
+      const now = Date.now();
+      let rl = rateLimitMap.get(socket.id);
+      if (!rl || now - rl.lastReset > TIME_WINDOW_MS) {
+        rl = { count: 0, lastReset: now };
+      }
+      rl.count += 1;
+      rl.lastReset = rl.lastReset || now;
+      rateLimitMap.set(socket.id, rl);
+      if (rl.count > MESSAGE_LIMIT) {
+        logger.warn(`Rate limit exceeded for user ${socket.user._id} in room ${room}`);
+        socket.emit("rate-limit", { message: "You are sending messages too quickly. Please slow down." });
+        return;
+      }
       // Only use schema-matching object
       const msg = {
         sender: socket.user._id, // ObjectId for sender
@@ -65,8 +101,9 @@ export default function initializeSocket(server) {
       };
       io.in(room).emit("receive-message", {
         ...msg,
-        senderName: socket.user.username, // send name for UI, but not for DB
+        senderName: socket.user.fullName || socket.user.username, // Prefer fullName for UI
       });
+      logger.info(`[Socket] Broadcasted receive-message to room ${room}`);
       try {
         const meeting = await Meeting.findOne({ roomId: room });
         if (meeting) {
@@ -116,6 +153,12 @@ export default function initializeSocket(server) {
             socket.to(roomId).emit("user:left-webrtc", { userId: socket.user._id });
           }
         }
+      });
+      // Emit updated deduplicated participants list
+      const rooms = Array.from(socket.rooms).filter(r => r !== socket.id);
+      rooms.forEach(room => {
+        const participants = getChatParticipants(room);
+        io.in(room).emit("room:participants", { participants });
       });
     });
   });

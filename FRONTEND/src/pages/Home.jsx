@@ -39,8 +39,8 @@ function Home() {
     setIsJoining(true)
     try {
       const response = await meetingService.joinMeeting(joinCode.trim().toUpperCase())
-      if (response.success && response.data?.roomId) {
-        navigate(`/meeting/${response.data.roomId}`)
+      if (response.success && response.data?.meetingCode) {
+        navigate(`/meeting/${response.data.meetingCode}`)
       }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to join meeting')
