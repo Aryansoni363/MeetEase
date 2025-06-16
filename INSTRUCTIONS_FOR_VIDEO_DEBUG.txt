@@ -1,0 +1,72 @@
+# MeetEase Video Meeting Debug Handover
+
+Hi,
+
+Here are the current issues, important aspects, and instructions for continuing the debugging of the video conferencing feature:
+
+## Current Status
+- **Chat/messaging is working perfectly in real time.**
+- **Video calling is still unreliable:** sometimes video tiles do not appear for all users, or streams are not attached correctly.
+- **Socket.IO and room logic are working (as proven by chat).**
+
+## Important Aspects & Architecture
+- **Frontend:**
+  - Main file: `FRONTEND/src/pages/Meeting.jsx` (WebRTC, video, chat logic)
+  - Uses React functional components, hooks, and refs for video/audio.
+  - Peer connections and video streams are managed by `socketId`.
+  - Remote streams are stored in `remoteStreamsRef` and attached to video elements by `socketId`.
+  - All signaling (offer/answer/ICE) is via Socket.IO events.
+- **Backend:**
+  - Main file: `BACKEND/src/socket/index.js` (Socket.IO server logic)
+  - Handles authentication, room join/leave, relays WebRTC signaling events, and chat.
+  - Emits deduplicated participants list (`room:participants`) and relays all signaling events.
+- **Database:**
+  - MongoDB is used for storing meeting and chat history.
+
+## Key Issues to Focus On
+1. **WebRTC Peer Connection Setup:**
+   - Ensure a single RTCPeerConnection per remote socketId.
+   - Offers, answers, and ICE candidates must be exchanged for every peer.
+2. **Stream/Video Element Mapping:**
+   - Streams must be attached to the correct video element (by socketId).
+   - If a stream arrives before the video element is rendered, it must be stored and attached later.
+3. **Race Conditions:**
+   - Watch for timing issues between stream arrival and video element rendering.
+   - Use logs to trace the order of events.
+4. **Clean Up:**
+   - When a user leaves, clean up their peer connection, video element, and stream refs.
+5. **Participants List:**
+   - Use only the deduplicated `room:participants` event for the participants list.
+   - Avoid duplicate video tiles for the same user (even if they reconnect or open multiple tabs).
+6. **Testing:**
+   - Always test with two or more browsers/tabs, joining/leaving in different orders.
+   - Check for video/audio permissions and browser compatibility.
+7. **Debugging:**
+   - Use browser console logs for all WebRTC and socket events.
+   - Backend logs are in `BACKEND/logs/`.
+   - If a video does not appear, check if the stream was received and if the video element was present.
+8. **Dependencies:**
+   - Uses React, Socket.IO, and native WebRTC APIs.
+   - Make sure all dependencies are installed (`npm install` in both FRONTEND and BACKEND).
+
+## What to Check/Do
+- Use browser console logs to trace all WebRTC events (offer, answer, ice, ontrack, stream attachment).
+- Test with two browsers/tabs, joining/leaving in different orders.
+- If a video does not appear, check if the stream was received and if the video element was present.
+- Review the logic in `Meeting.jsx` for:
+  - Peer connection creation and cleanup
+  - Stream storage and attachment
+  - Video element rendering
+
+## Next Steps
+- Continue debugging the WebRTC signaling and stream logic in `FRONTEND/src/pages/Meeting.jsx`.
+- If needed, add more logs or breakpoints to trace the flow.
+- Once video is reliable, clean up any extra logs and comments.
+- Review and test on different browsers and devices for compatibility.
+
+## Useful References
+- [WebRTC samples and docs](https://webrtc.org/getting-started/overview)
+- [Socket.IO docs](https://socket.io/docs/)
+- [React docs](https://react.dev/)
+
+Good luck! If you need more context, check the code comments and logs.
